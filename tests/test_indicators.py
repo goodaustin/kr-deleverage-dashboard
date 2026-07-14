@@ -1,4 +1,4 @@
-import numpy as np, pandas as pd, json, pathlib, pytest
+import numpy as np, pandas as pd, json, pathlib
 from src.indicators import rolling_pctl, derive
 from src.indicators import unwind, momentum_norm, composite, build_ind
 
@@ -55,9 +55,6 @@ def test_composite_partial_excludes_missing():
     assert comp["score"] == 44.3
 
 
-@pytest.mark.filterwarnings(
-    "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning"
-)
 def test_build_ind_partial_when_mcap_turnover_missing():
     idx = pd.date_range("2024-01-01", periods=120, freq="D").strftime("%Y%m%d")
     n = len(idx)
@@ -100,5 +97,16 @@ def test_unwind_fully_unwound():
     idx = pd.to_datetime(["2026-04-30","2026-06-24","2026-07-10"]).strftime("%Y%m%d")
     m = pd.Series([35.71, 38.63, 35.57], index=idx)
     u = unwind(m, baseline_date="20260430")
+    assert abs(u["U"] - 1.0) < 0.05
+    assert u["peak_date"] == "20260624"
+
+
+def test_unwind_baseline_holiday_resolves_to_next_trading_day():
+    # 20260430 為假日缺值：index 只有 20260429 / 20260504 / 20260624 / 20260710。
+    # baseline 應解析到「>= 20260430」的最早交易日 20260504，而非誤退回 iloc[0](20260429)。
+    idx = ["20260429", "20260504", "20260624", "20260710"]
+    m = pd.Series([35.00, 35.71, 38.63, 35.57], index=idx)
+    u = unwind(m, baseline_date="20260430")
+    assert u["baseline"] == round(35.71, 2)          # 值取自 20260504，非 20260429 的 35.00
     assert abs(u["U"] - 1.0) < 0.05
     assert u["peak_date"] == "20260624"

@@ -1,5 +1,6 @@
 """方法論核心（純函式）。所有比率公式逆向自原站 2026-07-10 快照。"""
 import math
+import warnings
 import numpy as np
 import pandas as pd
 
@@ -51,8 +52,14 @@ _PART_KEYS = {
 
 
 def unwind(margin: pd.Series, baseline_date: str) -> dict:
-    baseline = float(margin.loc[baseline_date]) if baseline_date in margin.index else float(margin.iloc[0])
-    seg = margin.loc[baseline_date:] if baseline_date in margin.index else margin
+    # baseline_date 若非交易日（例：假日）→ 取 >= baseline_date 的最早交易日；
+    # 若 baseline_date 晚於全部資料 → 退回 iloc[0]（最後手段）。
+    resolved_date = baseline_date
+    if baseline_date not in margin.index:
+        fwd = margin.index[margin.index >= baseline_date]
+        resolved_date = fwd.min() if len(fwd) > 0 else None
+    baseline = float(margin.loc[resolved_date]) if resolved_date is not None else float(margin.iloc[0])
+    seg = margin.loc[resolved_date:] if resolved_date is not None else margin
     peak = float(seg.max()); peak_date = str(seg.idxmax())
     current = float(margin.iloc[-1])
     denom = peak - baseline
@@ -105,7 +112,12 @@ def composite(pctl: dict, U: float, mom_norm: float, weights: dict) -> dict:
 def _downsample(df: pd.DataFrame, daily_from: str) -> pd.DataFrame:
     # df.index 為 YYYYMMDD 字串；轉 datetime 做 resample
     dt = df.copy(); dt.index = pd.to_datetime(dt.index)
-    early = dt[dt.index < pd.to_datetime(daily_from)].resample("W-FRI").last().dropna(how="all")
+    early_raw = dt[dt.index < pd.to_datetime(daily_from)]
+    # known pandas 2.3.x wart: "W-FRI" resample emits a DeprecationWarning about
+    # generic NumPy timedelta units internally; harmless, contained here at source.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        early = early_raw.resample("W-FRI").last().dropna(how="all")
     late  = dt[dt.index >= pd.to_datetime(daily_from)]
     out = pd.concat([early, late])
     out.index = out.index.strftime("%Y%m%d")
