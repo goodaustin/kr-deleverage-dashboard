@@ -15,6 +15,10 @@ def rolling_pctl(s: pd.Series, window: int, min_periods: int = 60) -> pd.Series:
 
     def _p(x):
         cur = x[-1]
+        if np.isnan(cur):
+            # 當期值本身缺值（例如信用資料 T+1 延遲、當日尚未入帳）→ 無法評百分位，
+            # 回傳 NaN 而非誤判為 0（0 百分位會被誤讀為「歷史新低」）。
+            return np.nan
         valid = x[~np.isnan(x)]
         if len(valid) < min_periods:
             return np.nan
@@ -141,11 +145,22 @@ def build_ind(full_df: pd.DataFrame, cfg: dict, flags: dict, generated: str, par
       "turn_heat": rolling_pctl(df["turn_heat"], w),
     }
     df["pctl_margin_total"] = pctl_series["margin_total"]
-    last = df.index[-1]
-    pctl = {k: round(float(v.loc[last]),1) if pd.notna(v.loc[last]) else None for k,v in pctl_series.items()}
+
+    # KOFIA 信用資料常有 T+1 公布延遲：df.index[-1]（asof_market）當天信用欄位可能仍是 NaN。
+    # asof_credit = 最後一個 margin_total 非缺值的日期 —— 所有「信用驅動」的計算
+    # （latest/latest_extra/pctl/unwind/composite/s1）都應以 asof_credit 為準，
+    # 避免當期 NaN 污染百分位／複合分數（見 task-8fix）。
+    credit_valid_idx = df.index[df["margin_total"].notna()]
+    asof_market = df.index[-1]
+    asof_credit = credit_valid_idx[-1] if len(credit_valid_idx) > 0 else asof_market
+    asof = asof_credit
+    asof_funds = asof_credit
+
+    pctl = {k: round(float(v.loc[asof_credit]),1) if pd.notna(v.loc[asof_credit]) else None for k,v in pctl_series.items()}
     partial = partial or any(pctl[k] is None for k in pctl)
-    u = unwind(df["margin_total"], cfg["baseline_date"])
-    margin_d5_pct = round((df["margin_total"].iloc[-1]/df["margin_total"].iloc[-6]-1)*100, 2)
+    margin_upto_credit = df["margin_total"].loc[:asof_credit]
+    u = unwind(margin_upto_credit, cfg["baseline_date"])
+    margin_d5_pct = round((margin_upto_credit.iloc[-1]/margin_upto_credit.iloc[-6]-1)*100, 2)
     comp = composite(pctl, u["U"], momentum_norm(margin_d5_pct), cfg["weights"])
     # 訊號 s1（自動）
     bandae_ma_pctl = pctl["bandae_amt"]; s1_ok = (bandae_ma_pctl is not None and bandae_ma_pctl < 50 and margin_d5_pct > -1)
@@ -153,24 +168,24 @@ def build_ind(full_df: pd.DataFrame, cfg: dict, flags: dict, generated: str, par
     ds = _downsample(df, cfg["daily_from"])
     return {
       "generated": generated, "sample": False, "partial": partial, "pctl_source": "rolling",
-      "data_from": df.index[0], "asof": last, "asof_market": last, "asof_credit": last, "asof_funds": last,
+      "data_from": df.index[0], "asof": asof, "asof_market": asof_market, "asof_credit": asof_credit, "asof_funds": asof_funds,
       "n_days_total": len(df), "daily_from": cfg["daily_from"],
       "config": {k: cfg[k] for k in ["baseline_date","pctl_window_days","weights","etf_enabled"]},
       "dates": list(ds.index),
       "series": {k: [None if pd.isna(x) else round(float(x),6) for x in ds[k]] if k in ds else [None]*len(ds) for k in _SERIES},
-      "latest": {k: round(float(df[k].iloc[-1]),6) for k in
+      "latest": {k: round(float(df[k].loc[asof_credit]),6) for k in
                  ["margin_total","margin_kospi","margin_kosdaq","deposit","margin_dep","margin_mcap",
                   "margin_val","misu","bandae_amt","bandae_ratio","kospi_idx","kosdaq_idx","turn_val","turn_heat"]},
       "latest_extra": {
-        "kospi_dd": round(float(df["kospi_dd"].iloc[-1]),2),
-        "kospi_hi52": round(float(df["kospi_idx"].tail(252).max()),2),
-        "kospi_hi52_date": str(df["kospi_idx"].tail(252).idxmax()),
-        "rv20": round(float(df["rv20"].iloc[-1]),1),
-        "bandae_amt_ma": round(float(df["bandae_amt_ma"].iloc[-1]),2),
-        "bandae_ratio_ma": round(float(df["bandae_ratio_ma"].iloc[-1]),2),
+        "kospi_dd": round(float(df["kospi_dd"].loc[asof_credit]),2),
+        "kospi_hi52": round(float(df["kospi_idx"].loc[:asof_credit].tail(252).max()),2),
+        "kospi_hi52_date": str(df["kospi_idx"].loc[:asof_credit].tail(252).idxmax()),
+        "rv20": round(float(df["rv20"].loc[asof_credit]),1),
+        "bandae_amt_ma": round(float(df["bandae_amt_ma"].loc[asof_credit]),2),
+        "bandae_ratio_ma": round(float(df["bandae_ratio_ma"].loc[asof_credit]),2),
         "margin_d5_pct": margin_d5_pct,
-        "bandae_peak": [round(float(df["bandae_amt"].max()),2), str(df["bandae_amt"].idxmax())],
-        "deposit_peak": [round(float(df["deposit"].max()),6), str(df["deposit"].idxmax())],
+        "bandae_peak": [round(float(df["bandae_amt"].loc[:asof_credit].max()),2), str(df["bandae_amt"].loc[:asof_credit].idxmax())],
+        "deposit_peak": [round(float(df["deposit"].loc[:asof_credit].max()),6), str(df["deposit"].loc[:asof_credit].idxmax())],
         "pctl": pctl,
       },
       "unwind": u, "composite": comp,

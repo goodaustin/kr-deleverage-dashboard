@@ -7,6 +7,7 @@ import pandas as pd
 
 from src import update as U
 from src.fetch_credit import CreditFetchError
+from src.fetch_market import MarketFetchError
 
 
 def test_merge_prefers_new_but_keeps_old_credit_on_nan():
@@ -107,3 +108,74 @@ def test_degrades_when_credit_fails(monkeypatch, tmp_path):
     assert "20260711" in result_df.index
     # credit fetch failed -> new row has no credit data
     assert pd.isna(result_df.loc["20260711", "margin_total"])
+
+
+def test_degrades_when_market_fails(monkeypatch, tmp_path):
+    """market fetch raises MarketFetchError; credit fetch still succeeds.
+
+    Regression for the _empty_frame object-dtype bug: an empty market frame used
+    to default to object dtype, which combine_first-contaminated the float columns
+    on merge, crashing indicators.derive()'s np.log(kospi_idx) with a TypeError.
+    main() must not crash, must still write output, and the resulting IND must be
+    partial (credit-only data flowing through derive() without a dtype crash).
+    """
+    tmp_csv = tmp_path / "daily.csv"
+    tmp_html = tmp_path / "index.html"
+    _make_tmp_daily_csv(tmp_csv)
+    _make_tmp_index_html(tmp_html)
+
+    def boom(s, e):
+        raise MarketFetchError("down")
+
+    monkeypatch.setattr(U, "fetch_market", boom)
+
+    small_credit = pd.DataFrame(
+        {
+            "margin_total": [35.2], "margin_kospi": [28.1], "margin_kosdaq": [7.1],
+            "deposit": [106.0], "misu": [1.35], "bandae_amt": [700.0],
+        },
+        index=pd.Index(["20260711"], name="date"),
+    )
+    monkeypatch.setattr(U, "fetch_credit", lambda s, e: small_credit)
+
+    changed = U.main(csv_path=str(tmp_csv), html_path=str(tmp_html))
+
+    assert changed is True
+
+    ind = _read_ind(tmp_html)
+    assert ind["partial"] is True
+
+    result_df = pd.read_csv(tmp_csv, index_col="date", dtype={"date": str})
+    assert "20260711" in result_df.index
+    # market fetch failed -> new row has no market data
+    assert pd.isna(result_df.loc["20260711", "kospi_idx"])
+    # credit fetch succeeded -> new row has credit data
+    assert result_df.loc["20260711", "margin_total"] == 35.2
+
+
+def test_both_fetches_fail_leaves_output_untouched(monkeypatch, tmp_path):
+    """Safety net: if BOTH sources fail there is nothing new to merge in —
+    daily.csv and index.html must be left byte-for-byte untouched, and main()
+    must return False (no update) rather than crash or write garbage."""
+    tmp_csv = tmp_path / "daily.csv"
+    tmp_html = tmp_path / "index.html"
+    _make_tmp_daily_csv(tmp_csv)
+    _make_tmp_index_html(tmp_html)
+
+    csv_before = tmp_csv.read_bytes()
+    html_before = tmp_html.read_bytes()
+
+    def market_boom(s, e):
+        raise MarketFetchError("down")
+
+    def credit_boom(s, e):
+        raise CreditFetchError("down")
+
+    monkeypatch.setattr(U, "fetch_market", market_boom)
+    monkeypatch.setattr(U, "fetch_credit", credit_boom)
+
+    changed = U.main(csv_path=str(tmp_csv), html_path=str(tmp_html))
+
+    assert changed is False
+    assert tmp_csv.read_bytes() == csv_before
+    assert tmp_html.read_bytes() == html_before

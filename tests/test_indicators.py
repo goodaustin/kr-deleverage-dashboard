@@ -10,6 +10,12 @@ def test_rolling_pctl_basic():
     assert abs(p.iloc[-1] - 99.0) < 1e-6  # 最後一點是最大 → ~99 百分位
     assert np.isnan(p.iloc[0])            # 不足 min_periods
 
+def test_rolling_pctl_nan_current_returns_nan():
+    # 當期值缺值（KOFIA T+1 延遲常見情境）時，不可誤判為 0 百分位 —— 必須回傳 NaN。
+    s = pd.Series(list(range(100)) + [np.nan])  # 100 個歷史值 + 當期 NaN
+    p = rolling_pctl(s, window=100)
+    assert np.isnan(p.iloc[-1])
+
 def test_derive_ratios_match_golden():
     L = GOLD["latest"]
     row = pd.DataFrame([{

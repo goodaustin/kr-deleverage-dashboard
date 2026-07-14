@@ -5,6 +5,7 @@ Graceful degradation: 任一來源（尤其信用 KOFIA freeSIS，常有 T+1 延
 """
 import hashlib
 import json
+import logging
 import pathlib
 from datetime import datetime, timedelta, timezone
 
@@ -16,6 +17,7 @@ from src.indicators import build_ind
 from src.render import render
 
 _KST = timezone(timedelta(hours=9))
+_LOG = logging.getLogger(__name__)
 
 # daily.csv 的真相欄位順序（見 docs/superpowers/specs/data-sources.md）
 _COLUMNS = [
@@ -59,7 +61,10 @@ def _hash_file(path: pathlib.Path) -> str:
 
 
 def _empty_frame(cols: list) -> pd.DataFrame:
-    df = pd.DataFrame(columns=cols)
+    # dtype=float：預設 object dtype 的空 DataFrame 一旦經 combine_first 併入 merge_recent，
+    # 會把整欄污染成 object dtype，導致 indicators.derive() 的 np.log(kospi_idx) 在市場
+    # 兩來源皆失敗時丟出 TypeError（見 task-8fix code review）。
+    df = pd.DataFrame(columns=cols, dtype=float)
     df.index.name = "date"
     return df
 
@@ -88,6 +93,16 @@ def main(csv_path: str = CSV_PATH, html_path: str = HTML_PATH) -> bool:
     except MarketFetchError:
         market_ok = False
         market_df = _empty_frame(["kospi_idx", "kosdaq_idx"] + _MARKET_ONLY_COLS)
+
+    if not credit_ok and not market_ok:
+        # 兩個來源同時失敗 —— 沒有任何新資料可併入。絕不能讓一批空 rows 蓋掉
+        # data/daily.csv 或重算並覆寫 index.html（merge 後全空的一天會讓 build_ind
+        # 依 asof_market 的 NaN 列往下算，也毫無意義）。原樣保留、直接回報無更新。
+        _LOG.warning(
+            "both market and credit fetches failed for %s..%s; leaving daily.csv and %s untouched",
+            start, end, html_path,
+        )
+        return False
 
     recent = market_df.join(credit_df, how="outer")
     recent = recent.reindex(columns=_COLUMNS)
