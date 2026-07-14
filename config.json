@@ -1,0 +1,12 @@
+{
+  "baseline_date": "20260430",
+  "pctl_window_days": 1250,
+  "daily_from": "20230101",
+  "etf_enabled": false,
+  "weights": {
+    "lvl_margin_pctl": 15.0, "lvl_mcap_pctl": 7.5, "lvl_dep_pctl": 7.5,
+    "unwind_remaining": 22.0, "momentum": 8.0,
+    "forced_amt_pctl": 10.0, "forced_ratio_pctl": 10.0,
+    "vol_pctl": 10.0, "turnover_pctl": 10.0
+  }
+}
