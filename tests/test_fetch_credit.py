@@ -3,7 +3,7 @@ import pathlib
 
 import pytest
 
-from src.fetch_credit import parse_service, fetch_credit
+from src.fetch_credit import parse_service, fetch_credit, CreditFetchError
 
 FIXTURES = pathlib.Path("tests/fixtures")
 
@@ -74,6 +74,16 @@ def test_fetch_credit_merges_columns(monkeypatch):
     assert row["deposit"] == pytest.approx(105.576, abs=1e-3)
     assert row["misu"] == pytest.approx(1.4294, abs=1e-4)
     assert row["bandae_amt"] == pytest.approx(816, abs=1)
+
+
+def test_fetch_credit_wraps_failure(monkeypatch):
+    def boom(obj_nm, start, end):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("src.fetch_credit._post_service", boom)
+
+    with pytest.raises(CreditFetchError):
+        fetch_credit("20260701", "20260713")
 
 
 @pytest.mark.network
