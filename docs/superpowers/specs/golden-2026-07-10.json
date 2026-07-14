@@ -1,0 +1,86 @@
+{
+  "latest": {
+    "margin_total": 35.573983,
+    "margin_kospi": 28.019642,
+    "margin_kosdaq": 7.554341,
+    "deposit": 105.575754,
+    "margin_dep": 33.7,
+    "margin_mcap": 0.54,
+    "margin_val": 0.92,
+    "misu": 1.429389,
+    "bandae_amt": 816.13,
+    "bandae_ratio": 5.7,
+    "kospi_idx": 7475.94,
+    "kosdaq_idx": 837.43,
+    "turn_val": 38.480013,
+    "turn_heat": 0.584
+  },
+  "latest_extra": {
+    "kospi_dd": -17.98,
+    "kospi_hi52": 9114.55,
+    "kospi_hi52_date": "20260622",
+    "rv20": 71.5,
+    "bandae_amt_ma": 648.19,
+    "bandae_ratio_ma": 4.82,
+    "margin_d5_pct": -5.87,
+    "bandae_peak": [
+      5497.37,
+      "20231020"
+    ],
+    "deposit_peak": [
+      139.694762,
+      "20260604"
+    ],
+    "pctl": {
+      "margin_total": 96.2,
+      "margin_mcap": 3.0,
+      "margin_dep": 41.6,
+      "bandae_amt": 98.2,
+      "bandae_ratio": 52.2,
+      "rv20": 97.4,
+      "turn_heat": 12.1
+    }
+  },
+  "unwind": {
+    "peak": 38.63,
+    "peak_date": "20260624",
+    "baseline": 35.71,
+    "baseline_date": "20260430",
+    "current": 35.57,
+    "U": 1.0,
+    "excess_peak": 2.92,
+    "excess_now": -0.14
+  },
+  "composite": {
+    "score": 45.8,
+    "zone": "mid",
+    "zone_label": "45-70 中後期：去化進行中",
+    "parts": {
+      "槓桿水位·融資餘額百分位": 14.43,
+      "槓桿水位·融資/市值百分位": 0.23,
+      "槓桿水位·融資/預託金百分位": 3.12,
+      "出清進度·未出清比例": 0.0,
+      "出清進度·融資動能": 2.0,
+      "被動賣壓·斷頭金額百分位": 9.82,
+      "被動賣壓·斷頭比率百分位": 5.22,
+      "市場應激·波動率": 9.74,
+      "市場應激·成交熱度": 1.21
+    }
+  },
+  "config": {
+    "baseline_date": "20260430",
+    "pctl_window_days": 1250,
+    "weights": {
+      "lvl_margin_pctl": 15.0,
+      "lvl_mcap_pctl": 7.5,
+      "lvl_dep_pctl": 7.5,
+      "unwind_remaining": 22.0,
+      "momentum": 8.0,
+      "forced_amt_pctl": 10.0,
+      "forced_ratio_pctl": 10.0,
+      "vol_pctl": 10.0,
+      "turnover_pctl": 10.0
+    },
+    "etf_enabled": false
+  }
+}
