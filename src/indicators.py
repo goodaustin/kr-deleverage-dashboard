@@ -1,6 +1,12 @@
 """方法論核心（純函式）。所有比率公式逆向自原站 2026-07-10 快照。"""
+import math
 import numpy as np
 import pandas as pd
+
+
+def _is_missing(v) -> bool:
+    """None 或 NaN 皆視為缺值（turnover/mcap 無免費資料來源時會是其一）。"""
+    return v is None or (isinstance(v, float) and math.isnan(v))
 
 
 def rolling_pctl(s: pd.Series, window: int, min_periods: int = 60) -> pd.Series:
@@ -70,17 +76,28 @@ def _zone(score: float):
     return _ZONES[-1][2], _ZONES[-1][3]
 
 
+# 7 個百分位分項各自來源於 pctl 字典的哪個 key
+_PCTL_SRC = {
+  "lvl_margin_pctl": "margin_total", "lvl_mcap_pctl": "margin_mcap",
+  "lvl_dep_pctl": "margin_dep", "forced_amt_pctl": "bandae_amt",
+  "forced_ratio_pctl": "bandae_ratio", "vol_pctl": "rv20",
+  "turnover_pctl": "turn_heat",
+}
+
+
 def composite(pctl: dict, U: float, mom_norm: float, weights: dict) -> dict:
-    # 各分項標準化值(0–1)
-    norm = {
-      "lvl_margin_pctl": pctl["margin_total"]/100, "lvl_mcap_pctl": pctl["margin_mcap"]/100,
-      "lvl_dep_pctl": pctl["margin_dep"]/100, "unwind_remaining": (1.0 - U),
-      "momentum": mom_norm, "forced_amt_pctl": pctl["bandae_amt"]/100,
-      "forced_ratio_pctl": pctl["bandae_ratio"]/100, "vol_pctl": pctl["rv20"]/100,
-      "turnover_pctl": pctl["turn_heat"]/100,
-    }
-    parts = {_PART_KEYS[k]: round(norm[k]*weights[k], 2) for k in weights}
-    score = round(sum(parts.values()), 1)
+    # 各分項標準化值(0–1)；百分位缺值（None/NaN，turnover、市值無免費資料來源時常見）→ None，
+    # 不計入 score（僅 unwind_remaining / momentum 恆有值）。
+    norm = {"unwind_remaining": (1.0 - U), "momentum": mom_norm}
+    for k, src in _PCTL_SRC.items():
+        v = pctl[src]
+        norm[k] = None if _is_missing(v) else v / 100
+
+    parts = {}
+    for k in weights:
+        n = norm[k]
+        parts[_PART_KEYS[k]] = None if n is None else round(n * weights[k], 2)
+    score = round(sum(v for v in parts.values() if v is not None), 1)
     z,lbl = _zone(score)
     return {"score":score,"zone":z,"zone_label":lbl,"parts":parts}
 
@@ -114,6 +131,7 @@ def build_ind(full_df: pd.DataFrame, cfg: dict, flags: dict, generated: str, par
     df["pctl_margin_total"] = pctl_series["margin_total"]
     last = df.index[-1]
     pctl = {k: round(float(v.loc[last]),1) if pd.notna(v.loc[last]) else None for k,v in pctl_series.items()}
+    partial = partial or any(pctl[k] is None for k in pctl)
     u = unwind(df["margin_total"], cfg["baseline_date"])
     margin_d5_pct = round((df["margin_total"].iloc[-1]/df["margin_total"].iloc[-6]-1)*100, 2)
     comp = composite(pctl, u["U"], momentum_norm(margin_d5_pct), cfg["weights"])
