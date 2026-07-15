@@ -113,6 +113,61 @@ def composite(pctl: dict, U: float, mom_norm: float, weights: dict) -> dict:
     return {"score":score,"zone":z,"zone_label":lbl,"parts":parts}
 
 
+def episode_scores(df: pd.DataFrame, pctl_series: dict, cfg: dict):
+    """本輪(baseline_date 解析後的交易日 → asof_credit)每日綜合分數序列。
+
+    逐日重建 unwind()/momentum_norm()/composite() 所需的輸入，並直接呼叫
+    composite() 取得該日分數 —— 與 build_ind 單日 composite 共用同一份公式，
+    避免時間序列與 gauge 分數之間出現公式漂移。turn_heat / margin_mcap 對每
+    一天皆視為缺值（partial），與目前 gauge 呈現方式一致。
+    回傳 (dates, scores)；若無信用資料則回傳 ([], [])。
+    """
+    credit_valid_idx = df.index[df["margin_total"].notna()]
+    if len(credit_valid_idx) == 0:
+        return [], []
+    asof_credit = credit_valid_idx[-1]
+
+    margin_full = df["margin_total"]
+    baseline_date = cfg["baseline_date"]
+    if baseline_date not in margin_full.index:
+        fwd = margin_full.index[margin_full.index >= baseline_date]
+        resolved_date = fwd.min() if len(fwd) > 0 else margin_full.index[0]
+    else:
+        resolved_date = baseline_date
+    baseline_val = float(margin_full.loc[resolved_date])
+
+    seg_index = margin_full.loc[resolved_date:asof_credit].index
+    seg_dates = [t for t in seg_index if pd.notna(margin_full.loc[t])]
+
+    weights = cfg["weights"]
+    dates, scores = [], []
+    running_peak = -math.inf
+    for t in seg_dates:
+        val = float(margin_full.loc[t])
+        running_peak = max(running_peak, val)
+        denom = running_peak - baseline_val
+        U_t = 0.0 if denom <= 0 else max(0.0, min(1.0, (running_peak - val) / denom))
+        U_t = round(U_t, 4)
+
+        pos = margin_full.index.get_loc(t)
+        if pos >= 5 and pd.notna(margin_full.iloc[pos - 5]) and margin_full.iloc[pos - 5] != 0:
+            d5_t = round((val / float(margin_full.iloc[pos - 5]) - 1) * 100, 2)
+        else:
+            d5_t = 0.0
+
+        pctl_t = {}
+        for src in ("margin_total", "margin_dep", "bandae_amt", "bandae_ratio", "rv20"):
+            v = pctl_series[src].loc[t]
+            pctl_t[src] = None if pd.isna(v) else round(float(v), 1)
+        pctl_t["margin_mcap"] = None
+        pctl_t["turn_heat"] = None
+
+        comp_t = composite(pctl_t, U_t, momentum_norm(d5_t), weights)
+        dates.append(t)
+        scores.append(comp_t["score"])
+    return dates, scores
+
+
 def _downsample(df: pd.DataFrame, daily_from: str) -> pd.DataFrame:
     # df.index 為 YYYYMMDD 字串；轉 datetime 做 resample
     dt = df.copy(); dt.index = pd.to_datetime(dt.index)
@@ -135,8 +190,9 @@ _SERIES = ["margin_total","margin_kospi","margin_kosdaq","deposit","margin_dep",
 
 def build_ind(full_df: pd.DataFrame, cfg: dict, flags: dict, generated: str, partial: bool) -> dict:
     df = derive(full_df)
-    df["bandae_amt_ma"]   = df["bandae_amt"].rolling(5, min_periods=1).mean()
-    df["bandae_ratio_ma"] = df["bandae_ratio"].rolling(5, min_periods=1).mean()
+    bandae_ma_days = cfg.get("bandae_ma_days", 5)
+    df["bandae_amt_ma"]   = df["bandae_amt"].rolling(bandae_ma_days, min_periods=1).mean()
+    df["bandae_ratio_ma"] = df["bandae_ratio"].rolling(bandae_ma_days, min_periods=1).mean()
     w = cfg["pctl_window_days"]
     pctl_series = {
       "margin_total": rolling_pctl(df["margin_total"], w), "margin_mcap": rolling_pctl(df["margin_mcap"], w),
@@ -162,6 +218,7 @@ def build_ind(full_df: pd.DataFrame, cfg: dict, flags: dict, generated: str, par
     u = unwind(margin_upto_credit, cfg["baseline_date"])
     margin_d5_pct = round((margin_upto_credit.iloc[-1]/margin_upto_credit.iloc[-6]-1)*100, 2)
     comp = composite(pctl, u["U"], momentum_norm(margin_d5_pct), cfg["weights"])
+    sh_dates, sh_scores = episode_scores(df, pctl_series, cfg)
     # 訊號 s1（自動）
     bandae_ma_pctl = pctl["bandae_amt"]; s1_ok = (bandae_ma_pctl is not None and bandae_ma_pctl < 50 and margin_d5_pct > -1)
     s1_status = "green" if s1_ok else ("amber" if (bandae_ma_pctl or 100) < 70 else "red")
@@ -189,9 +246,10 @@ def build_ind(full_df: pd.DataFrame, cfg: dict, flags: dict, generated: str, par
         "pctl": pctl,
       },
       "unwind": u, "composite": comp,
+      "score_history": {"dates": list(sh_dates), "score": sh_scores},
       "signals": {
         "s1": {"status": s1_status, "label": "技術性賣壓衰竭",
-               "detail": f"斷頭金額5日均百分位 {bandae_ma_pctl}｜融資5日 {margin_d5_pct}%"},
+               "detail": f"斷頭金額{bandae_ma_days}日均百分位 {bandae_ma_pctl}｜融資5日 {margin_d5_pct}%"},
         "s2": {"status": flags["s2"]["status"], "label": "外部催化劑落地", "detail": flags["s2"]["detail"]},
         "s3": {"status": flags["s3"]["status"], "label": "監管干預力度", "detail": flags["s3"]["detail"]},
       },
