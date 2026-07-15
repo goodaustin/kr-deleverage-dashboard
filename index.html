@@ -141,6 +141,12 @@ a { color:var(--s1); text-decoration:none; }
     <div id="commBody"></div>
   </div>
 
+  <div class="card" id="trajCard" style="margin-bottom:14px">
+    <h3>本輪去槓桿・綜合壓力指數軌跡</h3>
+    <div class="desc">基期 2026/4/30 至今，0–100，越高壓力越大</div>
+    <div id="trajBox"></div>
+  </div>
+
   <div class="filters" id="filters"><span class="fl">期間</span></div>
   <div class="grid" id="cards"></div>
 
@@ -336,6 +342,56 @@ function chart(host,cfg){
   }
 }
 
+/* ---------- 綜合壓力指數軌跡（本輪；獨立 dates/score，帶 zone bands） ---------- */
+function renderTraj(){
+  const card=$('#trajCard'); if(!card) return;
+  const SH=IND.score_history;
+  if(!SH||!Array.isArray(SH.dates)||!Array.isArray(SH.score)||!SH.dates.length){ card.style.display='none'; return; }
+  card.style.display='';
+  const host=$('#trajBox'); host.innerHTML='';
+  const dates=SH.dates, score=SH.score, n=dates.length;
+  const W=host.clientWidth||520, H=230, pad={l:8,r:8,t:12,b:22};
+  const mn=0, mx=100, ticks=[0,25,50,75,100], yFmt=v=>fmtN(v,0);
+  const tickW=Math.max(...ticks.map(t=>String(yFmt(t)).length))*6.6+8;
+  const pl=pad.l+tickW, pw=W-pl-pad.r, ph=H-pad.t-pad.b;
+  const X=i=>pl+pw*(n===1?0.5:i/(n-1));
+  const Y=v=>pad.t+ph*(1-(v-mn)/(mx-mn));
+  const NS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(NS,'svg');
+  svg.setAttribute('width',W); svg.setAttribute('height',H); svg.style.display='block';
+  const add=(p,t,at)=>{const e=document.createElementNS(NS,t); for(const k in at)e.setAttribute(k,at[k]); p.appendChild(e); return e;};
+  // zone bands (faint) + labels
+  const bands=[[0,15,'--good','尾聲'],[15,45,'--warn','初期'],[45,70,'--serious','中後期'],[70,100,'--crit','高壓']];
+  bands.forEach(([lo,hi,cv,lab])=>{ const yTop=Y(hi), yBot=Y(lo);
+    add(svg,'rect',{x:pl,y:yTop,width:pw,height:yBot-yTop,fill:css(cv),opacity:.12});
+    const tx=add(svg,'text',{x:W-pad.r-4,y:(yTop+yBot)/2+3.5,'text-anchor':'end','class':'tick'}); tx.textContent=lab; });
+  // grid + y ticks
+  ticks.forEach(t=>{ add(svg,'line',{x1:pl,x2:W-pad.r,y1:Y(t),y2:Y(t),stroke:css('--grid'),'stroke-width':1});
+    const tx=add(svg,'text',{x:pl-6,y:Y(t)+3.5,'text-anchor':'end','class':'tick'}); tx.textContent=yFmt(t); });
+  add(svg,'line',{x1:pl,x2:W-pad.r,y1:Y(0),y2:Y(0),stroke:css('--axis'),'stroke-width':1});
+  // x labels (≤4)
+  const xn=Math.min(4,n); for(let k=0;k<xn;k++){ const i=Math.round(k*(n-1)/(xn-1||1));
+    const tx=add(svg,'text',{x:X(i),y:H-6,'text-anchor':k===0?'start':(k===xn-1?'end':'middle'),'class':'tick'});
+    tx.textContent=fmtD(dates[i]).slice(2); }
+  // score line
+  const col=css('--s1'); let dPath='',started=false;
+  score.forEach((v,i)=>{ if(v==null){started=false;return;} dPath+=(started?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)+' '; started=true; });
+  add(svg,'path',{d:dPath,fill:'none',stroke:col,'stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'});
+  // crosshair + tooltip
+  const cross=add(svg,'line',{x1:0,x2:0,y1:pad.t,y2:pad.t+ph,stroke:css('--axis'),'stroke-width':1,opacity:0});
+  const hot=add(svg,'rect',{x:pl,y:pad.t,width:pw,height:ph,fill:'transparent'}); hot.style.cursor='crosshair';
+  function near(evX){ const rct=svg.getBoundingClientRect(); const rx=evX-rct.left; let best=0,bd=1e9;
+    for(let i=0;i<n;i++){const dd=Math.abs(X(i)-rx); if(dd<bd){bd=dd;best=i;}} return best; }
+  hot.addEventListener('mousemove',e=>{ const i=near(e.clientX); cross.setAttribute('x1',X(i)); cross.setAttribute('x2',X(i)); cross.setAttribute('opacity',1);
+    showTT(e.clientX,e.clientY,'<div class="tt-d">'+fmtD(dates[i])+'</div><div class="row"><span class="sw" style="width:9px;height:9px;border-radius:3px;background:'+col+'"></span>綜合壓力指數<span class="v">'+(score[i]==null?'–':fmtN(score[i],1))+'</span></div>'); });
+  hot.addEventListener('mouseleave',()=>{cross.setAttribute('opacity',0);hideTT();});
+  // last point + value label
+  const li=n-1, lv=score[li];
+  if(lv!=null){ add(svg,'circle',{cx:X(li),cy:Y(lv),r:4.5,fill:col,stroke:css('--surface-1'),'stroke-width':2});
+    const tx=add(svg,'text',{x:X(li),y:Y(lv)-9,'text-anchor':'end','class':'dlabel'}); tx.textContent='現值 '+fmtN(lv,1); }
+  host.appendChild(svg);
+}
+
 /* ---------- 本期解讀 ---------- */
 function genComment(){
   const C=IND.composite,U=IND.unwind,E=IND.latest_extra,P=E.pctl;
@@ -496,7 +552,7 @@ function method(){
   '<h4>綜合壓力指數（0-100）</h4>四大維度九分項：槓桿水位（融資餘額5年百分位 '+w.lvl_margin_pctl+'、融資/市值 '+w.lvl_mcap_pctl+'、融資/預託金 '+w.lvl_dep_pctl+'）＋出清進度（未出清比例 '+w.unwind_remaining+'、融資5日動能 '+w.momentum+'）＋被動賣壓（斷頭金額 '+w.forced_amt_pctl+'、斷頭比率 '+w.forced_ratio_pctl+'）＋市場應激（波動率 '+w.vol_pctl+'、成交熱度 '+w.turnover_pctl+'）。'+
   '<h4>出清進度 U</h4><code>U =（峰值 − 目前）/（峰值 − 基期）</code>，基期預設 2026/04/30——本輪 AI 行情啟動前的槓桿水位（可於 CONFIG 調整）；U=100% 表示本輪新增槓桿全數退出。'+
   '<h4>數據源與時滯</h4>KOFIA 金融投資協會綜合統計（신용거래융자·투자자예탁금·미수금·반대매매·兩市指數/成交/市值，日度，1998至今）；KRX Data Marketplace（槓桿ETF，待啟用）。波動率以20日已實現波動率年化替代 VKOSPI。<b>回撤口徑</b>：距高點一律以「收盤對收盤」計（KOFIA 僅發布每日收盤指數）；盤中高點通常更高（例如 2026/6/19 盤中一度 9,385 vs 最高收盤 9,114），盤中口徑待 KRX 指數 OHLC 接入後提供切換。<b>公布時滯</b>：指數/成交額為 KRX 當日收盤後入庫；信用融資/預託金/斷頭數據為 KOFIA T+1 公布（實測常於次日下午更新），故信用類截止日通常比行情晚 1-2 個交易日，圖上融資線尾端較指數線短屬正常。'+
-  '<h4>訊號判定</h4>①技術性賣壓衰竭＝斷頭金額5日均百分位&lt;50 且 融資5日跌幅&lt;1%（ETF啟用後加入規模萎縮速度）；②③為人工旗標，依新聞更新。'+
+  '<h4>訊號判定</h4>①技術性賣壓衰竭＝斷頭金額2日均百分位&lt;50 且 融資5日跌幅&lt;1%（ETF啟用後加入規模萎縮速度）；②③為人工旗標，依新聞更新。'+
   '<h4>韓文術語對照</h4>신용거래융자＝信用融資（散戶向券商借錢買股）；투자자예탁금＝預託金（散戶帳上待投現金）；미수금＝未繳款（散戶欠券商的交割/保證金款項）；반대매매＝斷頭（券商強制平倉賣出）。';
   $('#foot').innerHTML='指標定義與權重可在 compute_indicators.py 的 CONFIG 調整；KOFIA 口徑僅涵蓋場內信用融資（不含槓桿 ETF 內含槓桿、股票質押與場外配資），信用數據為 T+1 公布。';
 }
@@ -504,7 +560,7 @@ function method(){
 /* ---------- render all ---------- */
 function renderAll(){
   gauge(IND.composite.score, IND.composite.zone);
-  tiles(); chips(); renderComment();
+  tiles(); chips(); renderComment(); renderTraj();
   const cardsBox=$('#cards');
   if(!cardsBox.dataset.built){ CARDS.forEach(c=>cardsBox.append(cardEl(c))); cardsBox.append(etfCard(),partsCard()); cardsBox.dataset.built=1; }
   CARDS.forEach(renderCard);
