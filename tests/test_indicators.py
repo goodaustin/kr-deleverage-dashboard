@@ -166,6 +166,24 @@ def test_score_history_present_and_consistent_with_composite():
     assert sh["score"][-1] == ind["composite"]["score"]
 
 
+def test_score_history_excess_relative_to_baseline():
+    # 超額槓桿(相對基期)平行序列：excess[i] = 融資餘額(t) − 基期融資餘額。
+    n = 160
+    df, idx = _make_synth_df(n=n)
+    baseline_date = idx[100]
+    cfg = {
+        "pctl_window_days": 90, "baseline_date": baseline_date,
+        "weights": GOLD["config"]["weights"], "etf_enabled": False,
+        "daily_from": idx[-30], "bandae_ma_days": 2,
+    }
+    ind = build_ind(df, cfg, _base_flags(), generated="2026-07-14T00:00:00", partial=False)
+    sh = ind["score_history"]
+    assert "excess" in sh
+    assert len(sh["excess"]) == len(sh["dates"])
+    assert abs(sh["excess"][0]) < 0.05                       # 起點約為基期本身 → ~0
+    assert abs(sh["excess"][-1] - ind["unwind"]["excess_now"]) < 0.05
+
+
 def test_unwind_fully_unwound():
     # 融資: 基期35.71 → 峰值38.63 → 現值35.57 ⇒ U≈1.0
     idx = pd.to_datetime(["2026-04-30","2026-06-24","2026-07-10"]).strftime("%Y%m%d")

@@ -120,11 +120,12 @@ def episode_scores(df: pd.DataFrame, pctl_series: dict, cfg: dict):
     composite() 取得該日分數 —— 與 build_ind 單日 composite 共用同一份公式，
     避免時間序列與 gauge 分數之間出現公式漂移。turn_heat / margin_mcap 對每
     一天皆視為缺值（partial），與目前 gauge 呈現方式一致。
-    回傳 (dates, scores)；若無信用資料則回傳 ([], [])。
+    回傳 (dates, scores, excess)；若無信用資料則回傳 ([], [], [])。
+    excess[i] = 融資餘額(t) − 基期融資餘額（相對基期的超額槓桿，單位 조）。
     """
     credit_valid_idx = df.index[df["margin_total"].notna()]
     if len(credit_valid_idx) == 0:
-        return [], []
+        return [], [], []
     asof_credit = credit_valid_idx[-1]
 
     margin_full = df["margin_total"]
@@ -140,7 +141,7 @@ def episode_scores(df: pd.DataFrame, pctl_series: dict, cfg: dict):
     seg_dates = [t for t in seg_index if pd.notna(margin_full.loc[t])]
 
     weights = cfg["weights"]
-    dates, scores = [], []
+    dates, scores, excess = [], [], []
     running_peak = -math.inf
     for t in seg_dates:
         val = float(margin_full.loc[t])
@@ -165,7 +166,8 @@ def episode_scores(df: pd.DataFrame, pctl_series: dict, cfg: dict):
         comp_t = composite(pctl_t, U_t, momentum_norm(d5_t), weights)
         dates.append(t)
         scores.append(comp_t["score"])
-    return dates, scores
+        excess.append(round(val - baseline_val, 2))
+    return dates, scores, excess
 
 
 def _downsample(df: pd.DataFrame, daily_from: str) -> pd.DataFrame:
@@ -218,7 +220,7 @@ def build_ind(full_df: pd.DataFrame, cfg: dict, flags: dict, generated: str, par
     u = unwind(margin_upto_credit, cfg["baseline_date"])
     margin_d5_pct = round((margin_upto_credit.iloc[-1]/margin_upto_credit.iloc[-6]-1)*100, 2)
     comp = composite(pctl, u["U"], momentum_norm(margin_d5_pct), cfg["weights"])
-    sh_dates, sh_scores = episode_scores(df, pctl_series, cfg)
+    sh_dates, sh_scores, sh_excess = episode_scores(df, pctl_series, cfg)
     # 訊號 s1（自動）
     bandae_ma_pctl = pctl["bandae_amt"]; s1_ok = (bandae_ma_pctl is not None and bandae_ma_pctl < 50 and margin_d5_pct > -1)
     s1_status = "green" if s1_ok else ("amber" if (bandae_ma_pctl or 100) < 70 else "red")
@@ -246,7 +248,7 @@ def build_ind(full_df: pd.DataFrame, cfg: dict, flags: dict, generated: str, par
         "pctl": pctl,
       },
       "unwind": u, "composite": comp,
-      "score_history": {"dates": list(sh_dates), "score": sh_scores},
+      "score_history": {"dates": list(sh_dates), "score": sh_scores, "excess": sh_excess},
       "signals": {
         "s1": {"status": s1_status, "label": "技術性賣壓衰竭",
                "detail": f"斷頭金額{bandae_ma_days}日均百分位 {bandae_ma_pctl}｜融資5日 {margin_d5_pct}%"},
