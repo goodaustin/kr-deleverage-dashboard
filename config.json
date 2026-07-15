@@ -2,6 +2,7 @@
   "baseline_date": "20260430",
   "pctl_window_days": 1250,
   "daily_from": "20230101",
+  "bandae_ma_days": 2,
   "etf_enabled": false,
   "weights": {
     "lvl_margin_pctl": 15.0, "lvl_mcap_pctl": 7.5, "lvl_dep_pctl": 7.5,

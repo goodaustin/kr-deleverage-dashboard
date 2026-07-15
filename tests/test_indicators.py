@@ -1,3 +1,4 @@
+import math
 import numpy as np, pandas as pd, json, pathlib
 from src.indicators import rolling_pctl, derive
 from src.indicators import unwind, momentum_norm, composite, build_ind
@@ -94,8 +95,75 @@ def test_build_ind_partial_when_mcap_turnover_missing():
     assert ind["composite"]["parts"]["槓桿水位·融資/市值百分位"] is None
     assert ind["latest_extra"]["pctl"]["turn_heat"] is None
     assert ind["latest_extra"]["pctl"]["margin_mcap"] is None
-    # 20 個 top-level keys 仍在
-    assert len(ind.keys()) == 20
+    # 21 個 top-level keys 仍在（新增 score_history，task-scorehist-A）
+    assert len(ind.keys()) == 21
+
+
+def _make_synth_df(n=160, seed=42):
+    idx = pd.date_range("2024-01-01", periods=n, freq="D").strftime("%Y%m%d")
+    rng = np.random.default_rng(seed)
+    margin_total = pd.Series(30 + rng.normal(0, 0.5, n).cumsum() * 0.05, index=idx)
+    df = pd.DataFrame({
+        "margin_total": margin_total,
+        "margin_kospi": margin_total * 0.6,
+        "margin_kosdaq": margin_total * 0.4,
+        "deposit": pd.Series(80 + rng.normal(0, 0.3, n).cumsum() * 0.02, index=idx),
+        "mcap": np.nan,       # 無免費資料來源 → NaN（與現行 pipeline 一致）
+        "turn_val": np.nan,   # 同上
+        "misu": pd.Series(500 + rng.normal(0, 5, n), index=idx),
+        "bandae_amt": pd.Series(100 + rng.normal(0, 10, n), index=idx),
+        "kospi_idx": pd.Series(2500 + rng.normal(0, 20, n).cumsum() * 0.1, index=idx),
+        "kosdaq_idx": pd.Series(800 + rng.normal(0, 10, n).cumsum() * 0.1, index=idx),
+    }, index=idx)
+    return df, idx
+
+
+def _base_flags():
+    return {
+        "s2": {"status": "green", "detail": ""},
+        "s3": {"status": "green", "detail": ""},
+        "etf_note": "",
+    }
+
+
+def test_bandae_ma_days_config_respected():
+    # CHANGE 1: 斷頭均線天數改由 config 驅動 (bandae_ma_days=2)。
+    df, idx = _make_synth_df(n=80)
+    cfg = {
+        "pctl_window_days": 60, "baseline_date": idx[0],
+        "weights": GOLD["config"]["weights"], "etf_enabled": False,
+        "daily_from": idx[-30], "bandae_ma_days": 2,
+    }
+    ind = build_ind(df, cfg, _base_flags(), generated="2026-07-14T00:00:00", partial=False)
+    expected = round(float(df["bandae_amt"].iloc[-2:].mean()), 2)
+    assert abs(ind["latest_extra"]["bandae_amt_ma"] - expected) < 1e-6
+    # detail 字串應隨 config 動態顯示天數，且融資5日字樣維持不變
+    assert "斷頭金額2日均百分位" in ind["signals"]["s1"]["detail"]
+    assert "融資5日" in ind["signals"]["s1"]["detail"]
+
+
+def test_score_history_present_and_consistent_with_composite():
+    # CHANGE 2: 本輪(baseline→asof_credit)每日綜合分數時間序列。
+    n = 160
+    df, idx = _make_synth_df(n=n)
+    baseline_date = idx[100]
+    cfg = {
+        "pctl_window_days": 90, "baseline_date": baseline_date,
+        "weights": GOLD["config"]["weights"], "etf_enabled": False,
+        "daily_from": idx[-30], "bandae_ma_days": 2,
+    }
+    ind = build_ind(df, cfg, _base_flags(), generated="2026-07-14T00:00:00", partial=False)
+    sh = ind["score_history"]
+    assert len(sh["dates"]) == len(sh["score"])
+    assert len(sh["dates"]) > 0
+    assert sh["dates"] == sorted(sh["dates"])              # 遞增
+    assert sh["dates"][0] >= baseline_date                  # 起點 >= 基期(已解析)
+    assert sh["dates"][-1] == ind["asof_credit"]             # 終點 == asof_credit
+    for s in sh["score"]:
+        assert math.isfinite(s)
+        assert 0.0 <= s <= 100.0
+    # 關鍵一致性：時間序列最後一點必須等於 gauge 的 composite.score
+    assert sh["score"][-1] == ind["composite"]["score"]
 
 
 def test_unwind_fully_unwound():
